@@ -9,6 +9,9 @@
 -module(svt).
 -export([start/1]).
 
+-define(TAG_CONTRACT_CALL_TX, 43).
+-define(TAG_SIGNED_TX, 11).
+-define(OBJECT_VERSION, 1).
 
 
 -spec start(ArgV) -> ok
@@ -21,7 +24,8 @@ start(ArgV) ->
 
 unsigned_tx_data() ->
     "tx_+LUrAaEBzZdh1MDoqUeB7A/dvSoARg6L/nLK94Po8YYSBwtGkhMBoQWPFvtl5SACr++edEMrwJzoQp7/Tu6vJ3vxsdi9P5O+hQOGteYg9IAAAACCTiCEO5rKALhaKxH1lAXbW58AoM2XYdTA6KlHgewP3b0qAEYOi/5yyveD6PGGEgcLRpITAJ8AoM2XYdTA6KlHgewP3b0qAEYOi/5yyveD6PGGEgcLRpITOG+JA72RPmwd8//AoZ9UjA==".
-
+private_key() ->
+    "privkey".
 %% first task is to decompose that
 
 main([]) ->
@@ -36,6 +40,14 @@ main([]) ->
     %% unRLPencode (i guess the word is decode) the raw bytes
     {RLPData, <<>>} = vrlp:decode(ActualData),
     io:format("Unsigned data: ~tp~n", [mansplain(RLPData)]),
+    Signature = sign_tx(unsigned_tx_data(), private_key()),
+    RLPData0 = vrlp:encode([
+        encode_int(?TAG_SIGNED_TX),
+        encode_int(?OBJECT_VERSION),
+        Signature,
+        unsigned_tx_data()
+    ]),
+    io:format("Signed data: ~tp~n", [mansplain(RLPData0)]),
     ok.
 
 
@@ -58,7 +70,6 @@ mansplain([TagBytes, VsnBytes | Fields]) ->
     mansplain(TagInt, VsnInt, Fields).
 
 
--define(TAG_CONTRACT_CALL_TX, 43).
 
 %% Contract call tx
 mansplain(?TAG_CONTRACT_CALL_TX, 1, Fields) ->
@@ -123,3 +134,38 @@ mansplain_int(IntBytes) ->
 %% Take a bytestring and parse it as an int
 decode_int(Bytes) ->
     binary:decode_unsigned(Bytes).
+encode_int(Int) ->
+    binary:encode_unsigned(Int).
+
+
+-define(VALID_PRIVK(K), byte_size(K) =:= 64).
+sign_tx(Tx, PrivKey) -> sign_tx(Tx, PrivKey, false).
+sign_tx(Tx, PrivKey, SignHash) -> sign_tx(Tx, PrivKey, SignHash, undefined).
+sign_tx(Tx, PrivKey, SignHash, Pfx) ->
+  %% set debug true to meet legacy expectations (?)
+  sign_tx(Tx, PrivKey, SignHash, Pfx, [{debug, true}]).
+
+
+sign_tx(Tx, PrivKey, SignHash, AdditionalPrefix, Cfg) when is_binary(PrivKey) ->
+  sign_tx(Tx, [PrivKey], SignHash, AdditionalPrefix, Cfg);
+
+sign_tx(Tx, PrivKeys, SignHash, AdditionalPrefix, _Cfg) when is_list(PrivKeys) ->
+  Bin0 = aetx:serialize_to_binary(Tx),
+  Bin1 =
+    case SignHash of
+      true -> aec_hash:hash(signed_tx, Bin0);
+      false -> Bin0
+    end,
+  Bin =
+    case AdditionalPrefix of
+      undefined -> Bin1;
+      _ -> <<"-", AdditionalPrefix/binary, Bin1/binary>>
+    end,
+  BinForNetwork = aec_governance:add_network_id(Bin),
+  case lists:filter(fun (PrivKey) -> not (?VALID_PRIVK(PrivKey)) end, PrivKeys) of
+    [_ | _] = BrokenKeys -> erlang:error({invalid_priv_key, BrokenKeys});
+    [] -> pass
+  end,
+  Signatures =
+    [enacl:sign_detached(BinForNetwork, PrivKey) || PrivKey <- PrivKeys],
+  aetx_sign:new(Tx, Signatures).
