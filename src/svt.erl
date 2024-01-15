@@ -70,6 +70,13 @@ mansplain([TagBytes, VsnBytes | Fields]) ->
     mansplain(TagInt, VsnInt, Fields).
 
 
+mansplain(?TAG_SIGNED_TX, ?OBJECT_VERSION, Fields) ->
+    [Signatures_bytes,   %% [ <signatures>      :: binary()
+     Transaction_bytes]  %% , <transaction>       :: binary()
+        = Fields,
+    #{signatures  => mansplain_id(Signatures_bytes),
+      transaction => mansplain_int(Transaction_bytes)};
+    
 
 %% Contract call tx
 mansplain(?TAG_CONTRACT_CALL_TX, 1, Fields) ->
