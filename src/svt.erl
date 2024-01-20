@@ -25,7 +25,7 @@ start(ArgV) ->
 unsigned_tx_data() ->
     "tx_+LUrAaEBzZdh1MDoqUeB7A/dvSoARg6L/nLK94Po8YYSBwtGkhMBoQWPFvtl5SACr++edEMrwJzoQp7/Tu6vJ3vxsdi9P5O+hQOGteYg9IAAAACCTiCEO5rKALhaKxH1lAXbW58AoM2XYdTA6KlHgewP3b0qAEYOi/5yyveD6PGGEgcLRpITAJ8AoM2XYdTA6KlHgewP3b0qAEYOi/5yyveD6PGGEgcLRpITOG+JA72RPmwd8//AoZ9UjA==".
 private_key() ->
-    "privkey".
+    "59dee4218cc7d090b90ff15bd65f6fa8858a625d93861ca2ee77d63fd30be7d029f0a54388d542910640181cf00c9932e8870cb6e155581c6f69c725225c304f".
 %% first task is to decompose that
 
 main([]) ->
@@ -38,17 +38,22 @@ main([]) ->
       CheckBytes:4/bytes>>              = CheckedData,
     true                                = check_bytes_match(ActualData, CheckBytes),
     %% unRLPencode (i guess the word is decode) the raw bytes
-    {RLPData, <<>>} = vrlp:decode(ActualData),
-    io:format("Unsigned data: ~tp~n", [mansplain(RLPData)]),
-    Signature = sign_tx(unsigned_tx_data(), private_key()),
-    RLPData0 = vrlp:encode([
+    {Tx, <<>>} = vrlp:decode(ActualData),
+    io:format("Mansplain Unsigned data: ~tp~n", [mansplain(Tx)]),
+    Signature = crypto:sign(ecdsa, sha, Tx, private_key(),[]),
+    SignedContractCallTxRaw = vrlp:encode([
         encode_int(?TAG_SIGNED_TX),
         encode_int(?OBJECT_VERSION),
         Signature,
         unsigned_tx_data()
     ]),
-    io:format("Signed data: ~tp~n", [mansplain(RLPData0)]),
-    ok.
+    CheckBytes0 = shasha4(SignedContractCallTxRaw),
+    io:format("Mainsplain Signed data: ~tp~n", [mansplain(SignedContractCallTxRaw)]),
+    CheckedData0 = <<SignedContractCallTxRaw/bytes, CheckBytes0:4/bytes>>,
+    Base64Data0 = base64:encode(CheckedData0),
+    SignedContractCall = "tx_" ++ Base64Data0,
+    io:format("Signed contract call: ~tp~n", [SignedContractCall]).
+
 
 
 check_bytes_match(ActualData, CheckBytes) ->
@@ -145,34 +150,3 @@ encode_int(Int) ->
     binary:encode_unsigned(Int).
 
 
--define(VALID_PRIVK(K), byte_size(K) =:= 64).
-sign_tx(Tx, PrivKey) -> sign_tx(Tx, PrivKey, false).
-sign_tx(Tx, PrivKey, SignHash) -> sign_tx(Tx, PrivKey, SignHash, undefined).
-sign_tx(Tx, PrivKey, SignHash, Pfx) ->
-  %% set debug true to meet legacy expectations (?)
-  sign_tx(Tx, PrivKey, SignHash, Pfx, [{debug, true}]).
-
-
-sign_tx(Tx, PrivKey, SignHash, AdditionalPrefix, Cfg) when is_binary(PrivKey) ->
-  sign_tx(Tx, [PrivKey], SignHash, AdditionalPrefix, Cfg);
-
-sign_tx(Tx, PrivKeys, SignHash, AdditionalPrefix, _Cfg) when is_list(PrivKeys) ->
-  Bin0 = aetx:serialize_to_binary(Tx),
-  Bin1 =
-    case SignHash of
-      true -> aec_hash:hash(signed_tx, Bin0);
-      false -> Bin0
-    end,
-  Bin =
-    case AdditionalPrefix of
-      undefined -> Bin1;
-      _ -> <<"-", AdditionalPrefix/binary, Bin1/binary>>
-    end,
-  BinForNetwork = aec_governance:add_network_id(Bin),
-  case lists:filter(fun (PrivKey) -> not (?VALID_PRIVK(PrivKey)) end, PrivKeys) of
-    [_ | _] = BrokenKeys -> erlang:error({invalid_priv_key, BrokenKeys});
-    [] -> pass
-  end,
-  Signatures =
-    [enacl:sign_detached(BinForNetwork, PrivKey) || PrivKey <- PrivKeys],
-  aetx_sign:new(Tx, Signatures).
